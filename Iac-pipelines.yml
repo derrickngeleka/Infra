@@ -1,0 +1,142 @@
+trigger:
+- main
+
+variables:
+  tfDir: '$(Build.SourcesDirectory)'
+  planPath: '$(System.DefaultWorkingDirectory)/tfplan.binary'
+  svcConn: 'Terraform-Service-Principle'
+
+stages:
+# ---------------- Build (Plan) ----------------
+- stage: Build
+  jobs:
+  - job: Build
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: TerraformInstaller@1
+      displayName: Install Terraform
+      inputs:
+        terraformVersion: 'latest'
+
+    - task: TerraformTask@5
+      displayName: Terraform Init
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(tfDir)'
+        backendServiceArm: '$(svcConn)'
+        backendAzureRmResourceGroupName: 'dmnlaabs-tf-state-rg'
+        backendAzureRmStorageAccountName: 'dmnlaabdevstfstate'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'dev.terraform.tfstate'
+
+    - task: TerraformTask@5
+      displayName: Terraform Validate
+      inputs:
+        provider: azurerm
+        command: validate
+        workingDirectory: '$(tfDir)'
+
+    - task: TerraformTask@5
+      displayName: Terraform Format
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        workingDirectory: '$(tfDir)'
+        outputTo: 'console'
+        customCommand: 'fmt'
+        environmentServiceNameAzureRM: '$(svcConn)'
+
+    - task: TerraformTask@5
+      displayName: Terraform Plan
+      inputs:
+        provider: azurerm
+        command: plan
+        workingDirectory: '$(tfDir)'
+        commandOptions: '-out=$(planPath)'
+        environmentServiceNameAzureRM: '$(svcConn)'
+
+    # publish the plan as a pipeline artifact (name = tfplan)
+    - publish: '$(planPath)'
+      artifact: tfplan
+
+# ---------------- Deploy (Apply) ----------------
+- stage: Deploy
+  displayName: Deploy
+  dependsOn: Build
+  jobs:
+  - deployment: Deploy
+    environment: dev
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          # ensure the repo (with .tf files) exists in the deploy job
+          - checkout: self
+
+          # download the "tfplan" artifact from this run
+          - download: current
+            artifact: tfplan
+
+          - task: TerraformInstaller@1
+            displayName: Install Terraform
+            inputs:
+              terraformVersion: 'latest'
+
+          - task: TerraformTask@5
+            displayName: Terraform Init (Deploy)
+            inputs:
+              provider: azurerm
+              command: init
+              workingDirectory: '$(tfDir)'
+              backendServiceArm: '$(svcConn)'
+              backendAzureRmResourceGroupName: 'dmnlaabs-tf-state-rg'
+              backendAzureRmStorageAccountName: 'dmnlaabdevstfstate'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: 'dev.terraform.tfstate'
+
+
+          - task: TerraformTask@5
+            displayName: Terraform Apply
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              workingDirectory: '$(tfDir)'
+              environmentServiceNameAzureRM: '$(svcConn)'
+
+## ---------------- Destroy ----------------        
+- stage: Destroy
+  displayName: Destroy
+  jobs:
+  - job: Destroy
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: TerraformInstaller@1
+      displayName: Install Terraform
+      inputs:
+        terraformVersion: 'latest'
+
+    - task: TerraformTask@5
+      displayName: Terraform Init (Destroy)
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(tfDir)'
+        backendServiceArm: '$(svcConn)'
+        backendAzureRmResourceGroupName: 'dmnlaabs-tf-state-rg'
+        backendAzureRmStorageAccountName: 'dmnlaabdevstfstate'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'dev.terraform.tfstate'
+
+    - task: TerraformTask@5
+      displayName: Terraform Destroy
+      inputs:
+        provider: azurerm
+        command: destroy
+        workingDirectory: '$(tfDir)'
+        environmentServiceNameAzureRM: '$(svcConn)'
+        commandOptions: '-auto-approve'

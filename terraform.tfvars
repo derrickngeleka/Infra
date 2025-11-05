@@ -1,2 +1,2 @@
 location = "centralus"
-prefix   = "dmnlaabs1"
+prefix   = "dmnlaabs51"

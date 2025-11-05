@@ -1,0 +1,198 @@
+# ==========================================
+# ADO: Build & Publish Linux Golden Image
+# Manual run only
+# Self-hosted pools + federated service connections (AzureCLI@2)
+# ==========================================
+trigger: none
+name: $(Date:yyyyMMdd).$(Rev:r)
+
+variables:
+  packerDir: '$(Build.SourcesDirectory)/packer'
+
+  # service connections
+  svcConnNonProd: 'Terraform-Service-Principle'      # Testing/Dev
+  svcConnProd:    'Terraform-Service-Principle-Prod' # Prod
+
+  # self-hosted pools
+  poolTestingDev: 'dmn-dev-tf-agent-pipelines'
+  poolProd:       'dmn-prod-tf-agent-pipelines'
+
+stages:
+- stage: BuildImage
+  displayName: "Packer: Build Golden Image"
+  jobs:
+
+  # ---------- Testing ----------
+  - job: Build_Testing
+    displayName: "Build (Testing)"
+    condition: eq(variables['Build.SourceBranchName'], 'Testing')
+    pool: { name: '$(poolTestingDev)' }
+    steps:
+    - checkout: self
+      clean: true
+
+    # Install Azure CLI + Packer (once per job on the agent)
+    - script: |
+        set -e
+        # Azure CLI
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+        az version
+        # Packer
+        sudo apt-get update -y
+        sudo apt-get install -y curl gnupg lsb-release unzip jq ca-certificates
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+        sudo apt-get update -y && sudo apt-get install -y packer
+        packer -v
+      displayName: "Install Azure CLI + Packer"
+
+    # Login AND run Packer in the same AzureCLI@2 step so the auth context is present
+    - task: AzureCLI@2
+      displayName: "Login + packer build (Testing)"
+      inputs:
+        azureSubscription: '$(svcConnNonProd)'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          # Ensure a default subscription is set for use_azure_cli_auth
+          SUB_ID="$(az account show --query id -o tsv)"
+          az account set --subscription "$SUB_ID"
+          echo "Using subscription: $SUB_ID"
+
+          cd "$(packerDir)"
+
+          # Normalize to SIG-required Major.Minor.Patch version
+          VER="$BUILD_BUILDNUMBER"
+          if [[ "$VER" =~ ^[0-9]+$ ]]; then
+            VER="${VER}.0.0"
+          elif [[ "$VER" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            VER="${VER}.0"
+          elif [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            :
+          else
+            VER="$(date +%Y%m%d).0.${BUILD_BUILDID}"
+          fi
+          echo "Using image_version=$VER"
+
+          packer init .
+          packer validate -var-file="variables.testing.pkrvars.hcl" .
+          packer build \
+            -var-file="variables.testing.pkrvars.hcl" \
+            -var "image_version=$VER" \
+            .
+
+  # ---------- Dev ----------
+  - job: Build_Dev
+    displayName: "Build (Dev)"
+    condition: eq(variables['Build.SourceBranchName'], 'Dev')
+    pool: { name: '$(poolTestingDev)' }
+    steps:
+    - checkout: self
+      clean: true
+
+    - script: |
+        set -e
+        # Azure CLI
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+        az version
+        # Packer
+        sudo apt-get update -y
+        sudo apt-get install -y curl gnupg lsb-release unzip jq ca-certificates
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+        sudo apt-get update -y && sudo apt-get install -y packer
+        packer -v
+      displayName: "Install Azure CLI + Packer"
+
+    - task: AzureCLI@2
+      displayName: "Login + packer build (Dev)"
+      inputs:
+        azureSubscription: '$(svcConnNonProd)'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          SUB_ID="$(az account show --query id -o tsv)"
+          az account set --subscription "$SUB_ID"
+          echo "Using subscription: $SUB_ID"
+
+          cd "$(packerDir)"
+
+          VER="$BUILD_BUILDNUMBER"
+          if [[ "$VER" =~ ^[0-9]+$ ]]; then
+            VER="${VER}.0.0"
+          elif [[ "$VER" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            VER="${VER}.0"
+          elif [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            :
+          else
+            VER="$(date +%Y%m%d).0.${BUILD_BUILDID}"
+          fi
+          echo "Using image_version=$VER"
+
+          packer init .
+          packer validate -var-file="variables.dev.pkrvars.hcl" .
+          packer build \
+            -var-file="variables.dev.pkrvars.hcl" \
+            -var "image_version=$VER" \
+            .
+
+  # ---------- Prod ----------
+  - job: Build_Prod
+    displayName: "Build (Prod)"
+    condition: eq(variables['Build.SourceBranchName'], 'Prod')
+    pool: { name: '$(poolProd)' }
+    steps:
+    - checkout: self
+      clean: true
+
+    - script: |
+        set -e
+        # Azure CLI
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+        az version
+        # Packer
+        sudo apt-get update -y
+        sudo apt-get install -y curl gnupg lsb-release unzip jq ca-certificates
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+        sudo apt-get update -y && sudo apt-get install -y packer
+        packer -v
+      displayName: "Install Azure CLI + Packer"
+
+    - task: AzureCLI@2
+      displayName: "Login + packer build (Prod)"
+      inputs:
+        azureSubscription: '$(svcConnProd)'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          SUB_ID="$(az account show --query id -o tsv)"
+          az account set --subscription "$SUB_ID"
+          echo "Using subscription: $SUB_ID"
+
+          cd "$(packerDir)"
+
+          VER="$BUILD_BUILDNUMBER"
+          if [[ "$VER" =~ ^[0-9]+$ ]]; then
+            VER="${VER}.0.0"
+          elif [[ "$VER" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            VER="${VER}.0"
+          elif [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            :
+          else
+            VER="$(date +%Y%m%d).0.${BUILD_BUILDID}"
+          fi
+          echo "Using image_version=$VER"
+
+          packer init .
+          packer validate -var-file="variables.prod.pkrvars.hcl" .
+          packer build \
+            -var-file="variables.prod.pkrvars.hcl" \
+            -var "image_version=$VER" \
+            .

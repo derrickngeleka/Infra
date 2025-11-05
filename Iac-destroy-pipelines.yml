@@ -1,0 +1,226 @@
+# Manual-only Terraform destroy for Testing/Dev/Prod
+# Runs ONLY when:
+#  - you manually run it,
+#  - the source branch matches the stage (Testing | Dev | Prod), AND
+#  - the confirm text matches exactly ("DESTROY Testing" | "DESTROY Dev" | "DESTROY Prod")
+
+trigger: none
+pr: none
+
+# ---------------- Parameters ----------------
+parameters:
+- name: confirmText
+  displayName: 'Type EXACTLY: DESTROY Testing | DESTROY Dev | DESTROY Prod'
+  type: string
+  default: ''
+
+- name: dryRun
+  displayName: 'Dry-run only? (terraform plan -destroy)'
+  type: boolean
+  default: true
+
+# ---------------- Variables ----------------
+variables:
+  tfDir: '$(Build.SourcesDirectory)'
+  planPath: '$(Pipeline.Workspace)/tfplan.destroy'
+
+  # service connections
+  svcConn: 'Terraform-Service-Principle'
+  svcConnProd: 'Terraform-Service-Principle-Prod'
+
+  # backend per environment
+  testing_rg:  'dmnlaabs-testing-tf_sf-sa-rg'
+  testing_sa:  'dmnlaabstesttfsfsa'
+  testing_key: 'testing.terraform.tfstate'
+
+  dev_rg:  'dmnlaabs-dev-tf_sf-sa-rg'
+  dev_sa:  'dmnlaabsdevtfsfsa'
+  dev_key: 'dev.terraform.tfstate'
+
+  prod_rg:  'dmnlaabs-prod-tf_sf-sa-rg'
+  prod_sa:  'dmnlaabsprodtfsfsa'
+  prod_key: 'prod.terraform.tfstate'
+
+stages:
+# =========================================================
+# ===============  DESTROY: TESTING  ======================
+# =========================================================
+- stage: DestroyTesting
+  displayName: 'Destroy (Testing)'
+  condition: |
+    and(
+      eq(variables['Build.SourceBranchName'], 'Testing'),
+      eq('${{ parameters.confirmText }}','DESTROY Testing')
+    )
+  jobs:
+  - job: destroy_testing
+    displayName: 'Terraform destroy (Testing)'
+    pool:
+      name: 'dmn-dev-tf-agent-pipelines'
+    steps:
+    - script: |
+        sudo apt-get update -y
+        sudo apt-get install -y unzip
+      displayName: 'Install unzip (Terraform requirement)'
+
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform'
+      inputs:
+        terraformVersion: 'latest'
+
+    - task: TerraformTask@5
+      displayName: 'Terraform Init (Testing backend)'
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(tfDir)'
+        backendServiceArm: '$(svcConn)'
+        backendAzureRmResourceGroupName: '$(testing_rg)'
+        backendAzureRmStorageAccountName: '$(testing_sa)'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: '$(testing_key)'
+        use_azuread_auth: true
+
+    # DRY-RUN: plan -destroy
+    - ${{ if eq(parameters.dryRun, true) }}:
+      - task: TerraformTask@5
+        displayName: 'Terraform Plan -destroy (Testing)'
+        inputs:
+          provider: azurerm
+          command: plan
+          workingDirectory: '$(tfDir)'
+          commandOptions: '-destroy -out=$(planPath)'
+          environmentServiceNameAzureRM: '$(svcConn)'
+          use_azuread_auth: true
+
+    # REAL DESTROY: apply -destroy
+    - ${{ if ne(parameters.dryRun, true) }}:
+      - task: TerraformTask@5
+        displayName: 'Terraform Apply -destroy (Testing)'
+        inputs:
+          provider: azurerm
+          command: apply
+          workingDirectory: '$(tfDir)'
+          commandOptions: '-destroy -auto-approve'
+          environmentServiceNameAzureRM: '$(svcConn)'
+          use_azuread_auth: true
+
+# =========================================================
+# ==================  DESTROY: DEV  =======================
+- stage: DestroyDev
+  displayName: 'Destroy (Dev)'
+  condition: |
+    and(
+      eq(variables['Build.SourceBranchName'], 'Dev'),
+      eq('${{ parameters.confirmText }}','DESTROY Dev')
+    )
+  jobs:
+  - job: destroy_dev
+    displayName: 'Terraform destroy (Dev)'
+    pool:
+      name: 'dmn-dev-tf-agent-pipelines'
+    steps:
+    - script: |
+        sudo apt-get update -y
+        sudo apt-get install -y unzip
+      displayName: 'Install unzip (Terraform requirement)'
+
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform'
+      inputs:
+        terraformVersion: 'latest'
+
+    - task: TerraformTask@5
+      displayName: 'Terraform Init (Dev backend)'
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(tfDir)'
+        backendServiceArm: '$(svcConn)'
+        backendAzureRmResourceGroupName: '$(dev_rg)'
+        backendAzureRmStorageAccountName: '$(dev_sa)'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: '$(dev_key)'
+        use_azuread_auth: true
+
+    - ${{ if eq(parameters.dryRun, true) }}:
+      - task: TerraformTask@5
+        displayName: 'Terraform Plan -destroy (Dev)'
+        inputs:
+          provider: azurerm
+          command: plan
+          workingDirectory: '$(tfDir)'
+          commandOptions: '-destroy -out=$(planPath)'
+          environmentServiceNameAzureRM: '$(svcConn)'
+          use_azuread_auth: true
+
+    - ${{ if ne(parameters.dryRun, true) }}:
+      - task: TerraformTask@5
+        displayName: 'Terraform Apply -destroy (Dev)'
+        inputs:
+          provider: azurerm
+          command: apply
+          workingDirectory: '$(tfDir)'
+          commandOptions: '-destroy -auto-approve'
+          environmentServiceNameAzureRM: '$(svcConn)'
+          use_azuread_auth: true
+
+# =========================================================
+# =========================================================
+- stage: DestroyProd
+  displayName: 'Destroy (Prod)'
+  condition: |
+    and(
+      eq(variables['Build.SourceBranchName'], 'Prod'),
+      eq('${{ parameters.confirmText }}','DESTROY Prod')
+    )
+  jobs:
+  - job: destroy_prod
+    displayName: 'Terraform destroy (Prod)'
+    pool:
+      name: 'dmn-prod-tf-agent-pipelines'
+    steps:
+    - script: |
+        sudo apt-get update -y
+        sudo apt-get install -y unzip
+      displayName: 'Install unzip (Terraform requirement)'
+
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform'
+      inputs:
+        terraformVersion: 'latest'
+
+    - task: TerraformTask@5
+      displayName: 'Terraform Init (Prod backend)'
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(tfDir)'
+        backendServiceArm: '$(svcConnProd)'
+        backendAzureRmResourceGroupName: '$(prod_rg)'
+        backendAzureRmStorageAccountName: '$(prod_sa)'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: '$(prod_key)'
+        use_azuread_auth: true
+
+    - ${{ if eq(parameters.dryRun, true) }}:
+      - task: TerraformTask@5
+        displayName: 'Terraform Plan -destroy (Prod)'
+        inputs:
+          provider: azurerm
+          command: plan
+          workingDirectory: '$(tfDir)'
+          commandOptions: '-destroy -out=$(planPath)'
+          environmentServiceNameAzureRM: '$(svcConnProd)'
+          use_azuread_auth: true
+
+    - ${{ if ne(parameters.dryRun, true) }}:
+      - task: TerraformTask@5
+        displayName: 'Terraform Apply -destroy (Prod)'
+        inputs:
+          provider: azurerm
+          command: apply
+          workingDirectory: '$(tfDir)'
+          commandOptions: '-destroy -auto-approve'
+          environmentServiceNameAzureRM: '$(svcConnProd)'
+          use_azuread_auth: true

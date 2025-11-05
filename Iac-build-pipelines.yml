@@ -1,0 +1,369 @@
+# Auto-deploy based on branch:
+# - Testing -> Environment: testing (self-hosted: dmn-dev-tf-agent-pipelines)
+# - Dev     -> Environment: dev     (self-hosted: dmn-dev-tf-agent-pipelines)
+# - Prod    -> Environment: prod    (self-hosted: dmn-prod-tf-agent-pipelines)
+
+trigger:
+  branches:
+    include:
+      - testing
+      - dev
+      - main
+
+variables:
+  tfDir: '$(Build.SourcesDirectory)'
+  planPath: '$(Pipeline.Workspace)/tfplan.binary'
+
+  # Service connections
+  svcConn: 'Terraform-Service-Principle'          # non-prod SC (Dev/Testing)
+  svcConnProd: 'Terraform-Service-Principle-Prod' # prod SC
+
+  # Backend config (per env)
+  testing_rg:  'dmnlaabs-testing-tf_sf-sa-rg'
+  testing_sa:  'dmnlaabstesttfsfsa'
+  testing_key: 'testing.terraform.tfstate'
+
+  dev_rg:  'dmnlaabs-dev-tf_sf-sa-rg'
+  dev_sa:  'dmnlaabsdevtfsfsa'
+  dev_key: 'dev.terraform.tfstate'
+
+  prod_rg:  'dmnlaabs-prod-tf_sf-sa-rg'
+  prod_sa:  'dmnlaabsprodtfsfsa'
+  prod_key: 'prod.terraform.tfstate'
+
+stages:
+# ==================== BUILD (Validate & Plan) ====================
+- stage: Build
+  displayName: "Validate & Plan"
+  jobs:
+
+  # ---------- Testing (self-hosted testing pool) ----------
+  - job: Build_Testing
+    displayName: "Validate & Plan (Testing)"
+    condition: eq(variables['Build.SourceBranchName'], 'Testing')
+    pool:
+      name: 'dmn-dev-tf-agent-pipelines'
+    steps:
+    - script: |
+        sudo apt-get update -y
+        sudo apt-get install -y unzip
+      displayName: 'Install unzip (required by Terraform task)'
+
+    - task: TerraformInstaller@1
+      displayName: Install Terraform
+      inputs: { terraformVersion: 'latest' }
+
+    - task: TerraformTask@5
+      displayName: Terraform Init (Testing backend)
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(tfDir)'
+        backendServiceArm: '$(svcConn)'
+        backendAzureRmResourceGroupName: '$(testing_rg)'
+        backendAzureRmStorageAccountName: '$(testing_sa)'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: '$(testing_key)'
+        use_azuread_auth: true
+
+    - task: TerraformTask@5
+      displayName: Terraform Validate
+      inputs:
+        provider: azurerm
+        command: validate
+        workingDirectory: '$(tfDir)'
+
+    - task: TerraformTask@5
+      displayName: Terraform Format
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        workingDirectory: '$(tfDir)'
+        outputTo: 'console'
+        customCommand: 'fmt'
+        environmentServiceNameAzureRM: '$(svcConn)'
+
+    - task: TerraformTask@5
+      displayName: Terraform Plan (Testing)
+      inputs:
+        provider: azurerm
+        command: plan
+        workingDirectory: '$(tfDir)'
+        commandOptions: '-out=$(planPath)'
+        environmentServiceNameAzureRM: '$(svcConn)'
+        use_azuread_auth: true
+
+    - publish: '$(planPath)'
+      artifact: tfplan
+
+  # ---------- Dev (self-hosted dev pool) ----------
+  - job: Build_Dev
+    displayName: "Validate & Plan (Dev)"
+    condition: eq(variables['Build.SourceBranchName'], 'Dev')
+    pool:
+      name: 'dmn-dev-tf-agent-pipelines'
+    steps:
+    - script: |
+        sudo apt-get update -y
+        sudo apt-get install -y unzip
+      displayName: 'Install unzip (required by Terraform task)'
+
+    - task: TerraformInstaller@1
+      displayName: Install Terraform
+      inputs: { terraformVersion: 'latest' }
+
+    - task: TerraformTask@5
+      displayName: Terraform Init (Dev backend)
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(tfDir)'
+        backendServiceArm: '$(svcConn)'
+        backendAzureRmResourceGroupName: '$(dev_rg)'
+        backendAzureRmStorageAccountName: '$(dev_sa)'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: '$(dev_key)'
+        use_azuread_auth: true
+
+    - task: TerraformTask@5
+      displayName: Terraform Validate
+      inputs:
+        provider: azurerm
+        command: validate
+        workingDirectory: '$(tfDir)'
+
+    - task: TerraformTask@5
+      displayName: Terraform Format
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        workingDirectory: '$(tfDir)'
+        outputTo: 'console'
+        customCommand: 'fmt'
+        environmentServiceNameAzureRM: '$(svcConn)'
+
+    - task: TerraformTask@5
+      displayName: Terraform Plan (Dev)
+      inputs:
+        provider: azurerm
+        command: plan
+        workingDirectory: '$(tfDir)'
+        commandOptions: '-out=$(planPath)'
+        environmentServiceNameAzureRM: '$(svcConn)'
+        use_azuread_auth: true
+
+    - publish: '$(planPath)'
+      artifact: tfplan
+
+  # ---------- Prod (self-hosted prod pool) ----------
+  - job: Build_Prod
+    displayName: "Validate & Plan (Prod)"
+    condition: eq(variables['Build.SourceBranchName'], 'Prod')
+    pool:
+      name: 'dmn-prod-tf-agent-pipelines'
+    steps:
+    - script: |
+        sudo apt-get update -y
+        sudo apt-get install -y unzip
+      displayName: 'Install unzip (required by Terraform task)'
+
+    - task: TerraformInstaller@1
+      displayName: Install Terraform
+      inputs: { terraformVersion: 'latest' }
+
+    - task: TerraformTask@5
+      displayName: Terraform Init (Prod backend)
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(tfDir)'
+        backendServiceArm: '$(svcConnProd)'
+        backendAzureRmResourceGroupName: '$(prod_rg)'
+        backendAzureRmStorageAccountName: '$(prod_sa)'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: '$(prod_key)'
+        use_azuread_auth: true
+
+    - task: TerraformTask@5
+      displayName: Terraform Validate
+      inputs:
+        provider: azurerm
+        command: validate
+        workingDirectory: '$(tfDir)'
+
+    - task: TerraformTask@5
+      displayName: Terraform Format
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        workingDirectory: '$(tfDir)'
+        outputTo: 'console'
+        customCommand: 'fmt'
+        environmentServiceNameAzureRM: '$(svcConnProd)'
+
+    - task: TerraformTask@5
+      displayName: Terraform Plan (Prod)
+      inputs:
+        provider: azurerm
+        command: plan
+        workingDirectory: '$(tfDir)'
+        commandOptions: '-out=$(planPath)'
+        environmentServiceNameAzureRM: '$(svcConnProd)'
+        use_azuread_auth: true
+
+    - publish: '$(planPath)'
+      artifact: tfplan
+
+# ==================== DEPLOY ====================
+# ---------- Testing ----------
+- stage: DeployTesting
+  displayName: "Deploy to testing"
+  dependsOn: Build
+  condition: eq(variables['Build.SourceBranchName'], 'Testing')
+  jobs:
+  - deployment: DeployToTesting
+    displayName: "Apply plan to Testing"
+    environment: 'testing'
+    pool:
+      name: 'dmn-dev-tf-agent-pipelines'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+            clean: true
+          - download: current
+            artifact: tfplan
+          # REMOVE THIS SCRIPT WHEN DONE WITH CUSTOM AGENT IMAGE
+          - script: |
+              sudo apt-get update -y
+              sudo apt-get install -y unzip
+            displayName: 'Install unzip (required by Terraform task)'
+
+          - task: TerraformInstaller@1
+            inputs: { terraformVersion: 'latest' }
+
+          - task: TerraformTask@5
+            displayName: Terraform Init (Testing)
+            inputs:
+              provider: azurerm
+              command: init
+              workingDirectory: '$(tfDir)'
+              backendServiceArm: '$(svcConn)'
+              backendAzureRmResourceGroupName: '$(testing_rg)'
+              backendAzureRmStorageAccountName: '$(testing_sa)'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: '$(testing_key)'
+              use_azuread_auth: true
+
+          - task: TerraformTask@5
+            displayName: Terraform Apply (Testing)
+            inputs:
+              provider: azurerm
+              command: apply
+              workingDirectory: '$(tfDir)'
+              commandOptions: '$(Pipeline.Workspace)/tfplan/tfplan.binary'
+              environmentServiceNameAzureRM: '$(svcConn)'
+              use_azuread_auth: true
+
+# ---------- Dev ----------
+- stage: DeployDev
+  displayName: "Deploy to Dev"
+  dependsOn: Build
+  condition: eq(variables['Build.SourceBranchName'], 'Dev')
+  jobs:
+  - deployment: DeployToDev
+    displayName: "Apply plan to Dev"
+    environment: 'dev'
+    pool:
+      name: 'dmn-dev-tf-agent-pipelines'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+            clean: true
+          - download: current
+            artifact: tfplan
+          # REMOVE THIS SCRIPT WHEN DONE WITH CUSTOM AGENT IMAGE
+          - script: |
+              sudo apt-get update -y
+              sudo apt-get install -y unzip
+            displayName: 'Install unzip (required by Terraform task)'
+
+          - task: TerraformInstaller@1
+            inputs: { terraformVersion: 'latest' }
+
+          - task: TerraformTask@5
+            displayName: Terraform Init (Dev)
+            inputs:
+              provider: azurerm
+              command: init
+              workingDirectory: '$(tfDir)'
+              backendServiceArm: '$(svcConn)'
+              backendAzureRmResourceGroupName: '$(dev_rg)'
+              backendAzureRmStorageAccountName: '$(dev_sa)'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: '$(dev_key)'
+              use_azuread_auth: true
+
+          - task: TerraformTask@5
+            displayName: Terraform Apply (Dev)
+            inputs:
+              provider: azurerm
+              command: apply
+              workingDirectory: '$(tfDir)'
+              commandOptions: '$(Pipeline.Workspace)/tfplan/tfplan.binary'
+              environmentServiceNameAzureRM: '$(svcConn)'
+              use_azuread_auth: true
+
+# ---------- Prod ----------
+- stage: DeployProd
+  displayName: "Deploy to Prod"
+  dependsOn: Build
+  condition: eq(variables['Build.SourceBranchName'], 'Prod')
+  jobs:
+  - deployment: DeployToProd
+    displayName: "Apply plan to Prod"
+    environment: 'prod'   # add approvals/checks in ADO Environments
+    pool:
+      name: 'dmn-prod-tf-agent-pipelines'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+            clean: true
+          - download: current
+            artifact: tfplan
+          # REMOVE THIS SCRIPT WHEN DONE WITH CUSTOM AGENT IMAGE
+          - script: |
+              sudo apt-get update -y
+              sudo apt-get install -y unzip
+            displayName: 'Install unzip (required by Terraform task)'
+
+          - task: TerraformInstaller@1
+            inputs: { terraformVersion: 'latest' }
+
+          - task: TerraformTask@5
+            displayName: Terraform Init (Prod)
+            inputs:
+              provider: azurerm
+              command: init
+              workingDirectory: '$(tfDir)'
+              backendServiceArm: '$(svcConnProd)'
+              backendAzureRmResourceGroupName: '$(prod_rg)'
+              backendAzureRmStorageAccountName: '$(prod_sa)'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: '$(prod_key)'
+              use_azuread_auth: true
+
+          - task: TerraformTask@5
+            displayName: Terraform Apply (Prod)
+            inputs:
+              provider: azurerm
+              command: apply
+              workingDirectory: '$(tfDir)'
+              commandOptions: '$(Pipeline.Workspace)/tfplan/tfplan.binary'
+              environmentServiceNameAzureRM: '$(svcConnProd)'
+              use_azuread_auth: true
